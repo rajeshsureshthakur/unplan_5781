@@ -663,6 +663,17 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
   }
 
   void _showCreateNoteModal() {
+    if (_groupId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Group ID missing - cannot create note'),
+          backgroundColor: AppTheme.lightTheme.colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -670,6 +681,7 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
       builder: (context) => CreateNoteModalWidget(
         onCreateNote: (note) async {
           try {
+            print('📝 Creating note for group: $_groupId');
             final newNote = await _supabaseService.createNote(
               groupId: _groupId,
               content: note,
@@ -677,21 +689,27 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
             setState(() {
               _notes.insert(0, newNote);
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('✅ Note created successfully'),
-                backgroundColor: AppTheme.lightTheme.colorScheme.primary,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('✅ Note created successfully'),
+                  backgroundColor: AppTheme.lightTheme.colorScheme.primary,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('❌ Failed to create note'),
-                backgroundColor: AppTheme.lightTheme.colorScheme.error,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
+            print('❌ Note creation error: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                      '❌ Failed to create note: ${e.toString().contains('timeout') ? 'Connection timeout' : 'Please try again'}'),
+                  backgroundColor: AppTheme.lightTheme.colorScheme.error,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
           }
         },
       ),
@@ -699,6 +717,17 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
   }
 
   void _showCreatePollModal() {
+    if (_groupId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Group ID missing - cannot create poll'),
+          backgroundColor: AppTheme.lightTheme.colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -706,6 +735,14 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
       builder: (context) => CreatePollModalWidget(
         onCreatePoll: (question, options) async {
           try {
+            print('📊 Creating poll for group: $_groupId');
+            print('📊 Poll question: $question');
+            print('📊 Poll options: $options');
+
+            if (options.length < 2) {
+              throw Exception('Poll must have at least 2 options');
+            }
+
             final newPoll = await _supabaseService.createPoll(
               groupId: _groupId,
               question: question,
@@ -714,21 +751,28 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
             setState(() {
               _polls.insert(0, newPoll);
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('✅ Poll created successfully'),
-                backgroundColor: AppTheme.lightTheme.colorScheme.primary,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('✅ Poll created successfully'),
+                  backgroundColor: AppTheme.lightTheme.colorScheme.primary,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
           } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('❌ Failed to create poll'),
-                backgroundColor: AppTheme.lightTheme.colorScheme.error,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
+            print('❌ Poll creation error: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                      '❌ Failed to create poll: ${e.toString().contains('timeout') ? 'Connection timeout' : 'Please try again'}'),
+                  backgroundColor: AppTheme.lightTheme.colorScheme.error,
+                  behavior: SnackBarBehavior.floating,
+                  duration: Duration(seconds: 5),
+                ),
+              );
+            }
           }
         },
       ),
@@ -984,14 +1028,20 @@ class _GroupDashboardScreenState extends State<GroupDashboardScreen>
               Navigator.pushNamed(
                 context,
                 AppRoutes.eventCreation,
-                arguments: {'groupId': _groupId},
+                arguments: {
+                  'groupId': _groupId,
+                  'groupMembers': _members,
+                },
               );
               break;
             case 1: // Expenses
               Navigator.pushNamed(
                 context,
                 AppRoutes.expenseCreation,
-                arguments: {'groupId': _groupId},
+                arguments: {
+                  'groupId': _groupId,
+                  'groupMembers': _members,
+                },
               );
               break;
             case 2: // Notes

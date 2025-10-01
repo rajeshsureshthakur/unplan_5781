@@ -375,7 +375,7 @@ class SupabaseService {
     }
   }
 
-  // REVERT: Simple expense creation
+  // CRITICAL FIX: Enhanced expense creation with proper validation
   Future<Map<String, dynamic>> createExpense({
     required String groupId,
     required String title,
@@ -386,11 +386,45 @@ class SupabaseService {
   }) async {
     try {
       print('💰 Creating expense: $title');
+      print('📊 Input validation:');
+      print(
+          '  - Group ID: $groupId (${_isValidUUID(groupId) ? 'VALID' : 'INVALID'})');
+      print(
+          '  - Payer ID: $payerId (${_isValidUUID(payerId) ? 'VALID' : 'INVALID'})');
+      print(
+          '  - Event ID: $eventId (${eventId == null ? 'NULL' : _isValidUUID(eventId) ? 'VALID' : 'INVALID'})');
+      print('  - Split Members: $splitMembers');
+
+      // CRITICAL: Validate all UUIDs before database operation
+      if (!_isValidUUID(groupId)) {
+        throw Exception('Invalid group ID format: $groupId');
+      }
+      if (!_isValidUUID(payerId)) {
+        throw Exception('Invalid payer ID format: $payerId');
+      }
+      if (eventId != null && !_isValidUUID(eventId)) {
+        print('⚠️ Invalid event ID format, setting to null: $eventId');
+        eventId = null; // Set to null instead of failing
+      }
+
+      // Validate split members
+      final validSplitMembers = <String>[];
+      for (final memberId in splitMembers) {
+        if (_isValidUUID(memberId)) {
+          validSplitMembers.add(memberId);
+        } else {
+          print('⚠️ Skipping invalid split member ID: $memberId');
+        }
+      }
+
+      if (validSplitMembers.isEmpty) {
+        print('⚠️ No valid split members, adding payer as default');
+        validSplitMembers.add(payerId);
+      }
 
       // Generate a proper UUID for the expense
       final expenseId = _uuid.v4();
 
-      // CRITICAL FIX: Use actual current user profile instead of hardcoded demo user
       // Get the current user's profile to get their updated name and actual ID
       final currentUserProfile = await _getCurrentUserProfile();
       final actualPayerId = currentUserProfile['id'] ?? DEMO_USER_ID;
@@ -399,37 +433,64 @@ class SupabaseService {
       print('💰 Using payer: $actualPayerName (ID: $actualPayerId)');
 
       // Ensure current user is in split members
-      final cleanedSplitMembers = List<String>.from(splitMembers);
-      if (!cleanedSplitMembers.contains(actualPayerId)) {
-        cleanedSplitMembers.add(actualPayerId);
+      if (!validSplitMembers.contains(actualPayerId)) {
+        validSplitMembers.add(actualPayerId);
       }
 
-      // Create expense data
+      // Create expense data with proper validation
       final expenseData = {
         'id': expenseId,
         'group_id': groupId,
         'title': title.trim(),
         'amount': amount,
-        'payer_id': actualPayerId, // FIXED: Use actual user ID, not hardcoded
-        'event_id': eventId,
-        'split_members': cleanedSplitMembers,
+        'payer_id': actualPayerId, // Use actual user ID
+        'event_id': eventId, // Can be null
+        'split_members': validSplitMembers,
         'created_at': DateTime.now().toIso8601String(),
       };
+
+      print('💰 Final expense data being sent to database:');
+      print('  - ID: $expenseId');
+      print('  - Group ID: $groupId');
+      print('  - Payer ID: $actualPayerId');
+      print('  - Event ID: $eventId');
+      print('  - Split Members: $validSplitMembers');
 
       final response =
           await client.from('expenses').insert(expenseData).select('''
             *,
             payer:user_profiles!payer_id(full_name),
             event:events(title)
-          ''').single().timeout(Duration(seconds: 10));
+          ''').single().timeout(Duration(seconds: 15));
 
       print(
           '✅ Expense created successfully: ${response['id']} by ${response['payer']?['full_name']}');
       return response;
     } catch (error) {
       print('❌ Expense creation error: $error');
-      throw Exception('Failed to create expense. Please try again.');
+
+      // Enhanced error messaging
+      if (error.toString().contains('invalid input syntax for type uuid')) {
+        throw Exception(
+            'Invalid ID format detected. Please restart the app and try again.');
+      } else if (error.toString().contains('foreign key')) {
+        throw Exception(
+            'Group or user not found. Please check your membership status.');
+      } else if (error.toString().contains('timeout')) {
+        throw Exception(
+            'Connection timeout. Please check your internet connection.');
+      }
+
+      throw Exception('Failed to create expense: ${error.toString()}');
     }
+  }
+
+  // CRITICAL FIX: Add UUID validation helper
+  bool _isValidUUID(String value) {
+    if (value.isEmpty) return false;
+    final uuidPattern = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return uuidPattern.hasMatch(value);
   }
 
   // REVERT: Other simple methods
@@ -551,6 +612,7 @@ class SupabaseService {
     }
   }
 
+  // CRITICAL FIX: Enhanced note creation with proper validation
   Future<Map<String, dynamic>> createNote({
     required String groupId,
     required String content,
@@ -559,8 +621,18 @@ class SupabaseService {
     try {
       print('📝 Creating note for group: $groupId');
 
+      // CRITICAL: Validate group ID
+      if (!_isValidUUID(groupId)) {
+        throw Exception('Invalid group ID format: $groupId');
+      }
+
       final currentUserProfile = await _getCurrentUserProfile();
       final actualAuthorId = currentUserProfile['id'] ?? DEMO_USER_ID;
+
+      // Validate author ID
+      if (!_isValidUUID(actualAuthorId)) {
+        throw Exception('Invalid author ID format: $actualAuthorId');
+      }
 
       final noteData = {
         'group_id': groupId,
@@ -570,16 +642,33 @@ class SupabaseService {
         'status': 'active',
       };
 
+      print('📝 Final note data:');
+      print('  - Group ID: $groupId');
+      print('  - Author ID: $actualAuthorId');
+
       final response = await client.from('notes').insert(noteData).select('''
             *,
             author:user_profiles!author_id(full_name, profile_picture)
-          ''').single().timeout(Duration(seconds: 10));
+          ''').single().timeout(Duration(seconds: 15));
 
       print('✅ Note created successfully: ${response['id']}');
       return response;
     } catch (error) {
       print('❌ Note creation error: $error');
-      throw Exception('Failed to create note. Please try again.');
+
+      // Enhanced error messaging
+      if (error.toString().contains('invalid input syntax for type uuid')) {
+        throw Exception(
+            'Invalid ID format detected. Please restart the app and try again.');
+      } else if (error.toString().contains('foreign key')) {
+        throw Exception(
+            'Group not found. Please check your membership status.');
+      } else if (error.toString().contains('timeout')) {
+        throw Exception(
+            'Connection timeout. Please check your internet connection.');
+      }
+
+      throw Exception('Failed to create note: ${error.toString()}');
     }
   }
 
@@ -669,6 +758,7 @@ class SupabaseService {
     }
   }
 
+  // CRITICAL FIX: Enhanced poll creation with proper validation
   Future<Map<String, dynamic>> createPoll({
     required String groupId,
     required String question,
@@ -681,8 +771,22 @@ class SupabaseService {
     try {
       print('📊 Creating poll for group: $groupId');
 
+      // CRITICAL: Validate group ID
+      if (!_isValidUUID(groupId)) {
+        throw Exception('Invalid group ID format: $groupId');
+      }
+
+      if (options.length < 2) {
+        throw Exception('Poll must have at least 2 options');
+      }
+
       final currentUserProfile = await _getCurrentUserProfile();
       final actualAuthorId = currentUserProfile['id'] ?? DEMO_USER_ID;
+
+      // Validate author ID
+      if (!_isValidUUID(actualAuthorId)) {
+        throw Exception('Invalid author ID format: $actualAuthorId');
+      }
 
       // Generate poll ID
       final pollId = _uuid.v4();
@@ -700,11 +804,17 @@ class SupabaseService {
         'status': 'active',
       };
 
+      print('📊 Final poll data:');
+      print('  - ID: $pollId');
+      print('  - Group ID: $groupId');
+      print('  - Author ID: $actualAuthorId');
+      print('  - Options: ${options.length}');
+
       final pollResponse =
           await client.from('polls').insert(pollData).select('''
             *,
             author:user_profiles!author_id(full_name, profile_picture)
-          ''').single().timeout(Duration(seconds: 10));
+          ''').single().timeout(Duration(seconds: 15));
 
       // Create poll options
       final optionData = options.asMap().entries.map((entry) {
@@ -718,7 +828,7 @@ class SupabaseService {
       await client
           .from('poll_options')
           .insert(optionData)
-          .timeout(Duration(seconds: 8));
+          .timeout(Duration(seconds: 10));
 
       // Fetch complete poll with options
       final completeResponse = await client.from('polls').select('''
@@ -729,13 +839,26 @@ class SupabaseService {
               option_text,
               option_order
             )
-          ''').eq('id', pollId).single().timeout(Duration(seconds: 8));
+          ''').eq('id', pollId).single().timeout(Duration(seconds: 10));
 
       print('✅ Poll created successfully: ${completeResponse['id']}');
       return completeResponse;
     } catch (error) {
       print('❌ Poll creation error: $error');
-      throw Exception('Failed to create poll. Please try again.');
+
+      // Enhanced error messaging
+      if (error.toString().contains('invalid input syntax for type uuid')) {
+        throw Exception(
+            'Invalid ID format detected. Please restart the app and try again.');
+      } else if (error.toString().contains('foreign key')) {
+        throw Exception(
+            'Group not found. Please check your membership status.');
+      } else if (error.toString().contains('timeout')) {
+        throw Exception(
+            'Connection timeout. Please check your internet connection.');
+      }
+
+      throw Exception('Failed to create poll: ${error.toString()}');
     }
   }
 
@@ -952,6 +1075,160 @@ class SupabaseService {
     } catch (error) {
       print('❌ Error fetching group members: $error');
       return [];
+    }
+  }
+
+  // ================================================================================
+  // EVENTS MODULE METHODS
+  // ================================================================================
+
+  // CRITICAL FIX: Enhanced event creation with proper validation
+  Future<Map<String, dynamic>> createEvent({
+    required String groupId,
+    required String title,
+    required DateTime eventDate,
+    String? description,
+    String? venue,
+    String? notes,
+    String approvalStatus = 'pending',
+  }) async {
+    try {
+      print('🎉 Creating event: $title for group: $groupId');
+
+      // CRITICAL: Validate group ID
+      if (!_isValidUUID(groupId)) {
+        throw Exception('Invalid group ID format: $groupId');
+      }
+
+      final currentUserProfile = await _getCurrentUserProfile();
+      final actualCreatorId = currentUserProfile['id'] ?? DEMO_USER_ID;
+
+      // Validate creator ID
+      if (!_isValidUUID(actualCreatorId)) {
+        throw Exception('Invalid creator ID format: $actualCreatorId');
+      }
+
+      // Generate event ID
+      final eventId = _uuid.v4();
+
+      // Create event data
+      final eventData = {
+        'id': eventId,
+        'group_id': groupId,
+        'created_by': actualCreatorId,
+        'title': title.trim(),
+        'description': description?.trim(),
+        'event_date': eventDate.toIso8601String(),
+        'venue': venue?.trim(),
+        'notes': notes?.trim(),
+        'approval_status': approvalStatus,
+        'approval_count': 0,
+        'total_members': 0,
+      };
+
+      print('🎉 Final event data:');
+      print('  - ID: $eventId');
+      print('  - Group ID: $groupId');
+      print('  - Creator ID: $actualCreatorId');
+
+      final response = await client.from('events').insert(eventData).select('''
+            *,
+            creator:user_profiles!created_by(full_name, profile_picture)
+          ''').single().timeout(Duration(seconds: 15));
+
+      print('✅ Event created successfully: ${response['id']}');
+      return response;
+    } catch (error) {
+      print('❌ Event creation error: $error');
+
+      // Enhanced error messaging
+      if (error.toString().contains('invalid input syntax for type uuid')) {
+        throw Exception(
+            'Invalid ID format detected. Please restart the app and try again.');
+      } else if (error.toString().contains('foreign key')) {
+        throw Exception(
+            'Group not found. Please check your membership status.');
+      } else if (error.toString().contains('timeout')) {
+        throw Exception(
+            'Connection timeout. Please check your internet connection.');
+      }
+
+      throw Exception('Failed to create event: ${error.toString()}');
+    }
+  }
+
+  Future<Map<String, dynamic>?> getEventById(String eventId) async {
+    try {
+      print('🔍 Fetching event details: $eventId');
+
+      final response = await client.from('events').select('''
+            *,
+            creator:user_profiles!created_by(full_name, profile_picture),
+            group:groups(name, id)
+          ''').eq('id', eventId).single().timeout(Duration(seconds: 10));
+
+      print('✅ Event details fetched successfully');
+      return response;
+    } catch (error) {
+      print('❌ Error fetching event details: $error');
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> updateEvent({
+    required String eventId,
+    required String title,
+    required DateTime eventDate,
+    String? description,
+    String? venue,
+    String? notes,
+  }) async {
+    try {
+      print('📝 Updating event: $eventId');
+
+      final updateData = {
+        'title': title.trim(),
+        'description': description?.trim(),
+        'event_date': eventDate.toIso8601String(),
+        'venue': venue?.trim(),
+        'notes': notes?.trim(),
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+
+      final response = await client
+          .from('events')
+          .update(updateData)
+          .eq('id', eventId)
+          .select('''
+            *,
+            creator:user_profiles!created_by(full_name, profile_picture)
+          ''')
+          .single()
+          .timeout(Duration(seconds: 10));
+
+      print('✅ Event updated successfully');
+      return response;
+    } catch (error) {
+      print('❌ Event update error: $error');
+      throw Exception('Failed to update event. Please try again.');
+    }
+  }
+
+  Future<bool> deleteEvent(String eventId) async {
+    try {
+      print('🗑️ Deleting event: $eventId');
+
+      await client
+          .from('events')
+          .delete()
+          .eq('id', eventId)
+          .timeout(Duration(seconds: 10));
+
+      print('✅ Event deleted successfully');
+      return true;
+    } catch (error) {
+      print('❌ Event deletion error: $error');
+      throw Exception('Failed to delete event. Please try again.');
     }
   }
 }

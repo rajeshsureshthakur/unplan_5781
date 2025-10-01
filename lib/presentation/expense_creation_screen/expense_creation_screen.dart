@@ -132,17 +132,37 @@ class _ExpenseCreationScreenState extends State<ExpenseCreationScreen> {
       _groupId = arguments['groupId'] as String?;
       final groupMembers = arguments['groupMembers'] as List<dynamic>?;
 
-      if (groupMembers != null) {
+      print('💰 Expense creation screen arguments:');
+      print('  - Group ID: $_groupId');
+      print('  - Group Members: ${groupMembers?.length ?? 0}');
+
+      if (groupMembers != null && groupMembers.isNotEmpty) {
         _actualGroupMembers = groupMembers.map((member) {
-          final memberData = member['user_profiles'] ?? member;
+          final memberData = member is Map<String, dynamic>
+              ? member
+              : member['user_profiles'] ?? member;
+
+          final memberId = memberData['id']?.toString();
+          final memberName = memberData['full_name']?.toString() ??
+              memberData['name']?.toString() ??
+              'Unknown';
+
+          print('  - Processing member: $memberName (ID: $memberId)');
+
           return {
-            'id': memberData['id'] ?? member['id'] ?? '',
-            'name': memberData['full_name'] ?? member['name'] ?? 'Unknown',
-            'email': memberData['email'] ?? member['email'] ?? '',
-            'avatar': memberData['profile_picture'] ?? member['avatar'] ?? '',
+            'id': memberId ?? '',
+            'name': memberName,
+            'email': memberData['email']?.toString() ?? '',
+            'avatar': memberData['profile_picture']?.toString() ??
+                memberData['avatar']?.toString() ??
+                '',
             'isCurrentUser': false, // Will be set based on current user
           };
         }).toList();
+
+        print('✅ Processed ${_actualGroupMembers.length} group members');
+      } else {
+        print('⚠️ No group members provided');
       }
     }
   }
@@ -295,13 +315,67 @@ class _ExpenseCreationScreenState extends State<ExpenseCreationScreen> {
       throw Exception('Invalid form data - please check your inputs');
     }
 
-    // Prepare split members
-    final splitMembers = _actualGroupMembers.isNotEmpty
-        ? _actualGroupMembers.map((m) => m['id'] as String).toList()
-        : ['demo-user-fallback']; // Fallback for testing
+    // CRITICAL FIX: Properly prepare split members with valid UUIDs
+    final splitMembers = <String>[];
 
-    print(
-        '📊 Creating expense: $title, Amount: $amount, Split: ${splitMembers.length} members');
+    // If we have actual group members with valid UUIDs, use them
+    if (_actualGroupMembers.isNotEmpty) {
+      for (final member in _actualGroupMembers) {
+        final memberId = member['id']?.toString().trim();
+        if (memberId != null && memberId.isNotEmpty && _isValidUUID(memberId)) {
+          splitMembers.add(memberId);
+        }
+      }
+    }
+
+    // Fallback: If no valid UUIDs found, get current user ID from service
+    if (splitMembers.isEmpty) {
+      print('⚠️ No valid member UUIDs found, using current user as fallback');
+      try {
+        final currentUser = await SupabaseService.instance.getCurrentUser();
+        final currentUserId = currentUser['id']?.toString();
+        if (currentUserId != null && _isValidUUID(currentUserId)) {
+          splitMembers.add(currentUserId);
+        } else {
+          // Last resort: use demo user ID
+          splitMembers.add(SupabaseService.DEMO_USER_ID);
+        }
+      } catch (e) {
+        print('⚠️ Failed to get current user, using demo user: $e');
+        splitMembers.add(SupabaseService.DEMO_USER_ID);
+      }
+    }
+
+    // CRITICAL FIX: Ensure payer ID is valid UUID
+    String payerId = SupabaseService.DEMO_USER_ID; // Default fallback
+
+    if (_selectedPayer != null) {
+      final selectedPayerId = _selectedPayer!['id']?.toString().trim();
+      if (selectedPayerId != null && _isValidUUID(selectedPayerId)) {
+        payerId = selectedPayerId;
+      } else {
+        print('⚠️ Selected payer has invalid ID: $selectedPayerId');
+      }
+    }
+
+    // CRITICAL FIX: Validate event ID if selected
+    String? eventId;
+    if (_selectedEvent != null) {
+      final selectedEventId = _selectedEvent!['id']?.toString().trim();
+      if (selectedEventId != null && _isValidUUID(selectedEventId)) {
+        eventId = selectedEventId;
+      } else {
+        print(
+            '⚠️ Selected event has invalid ID: $selectedEventId, ignoring event');
+      }
+    }
+
+    print('📊 Final expense data:');
+    print('  - Title: $title');
+    print('  - Amount: $amount');
+    print('  - Payer ID: $payerId');
+    print('  - Event ID: $eventId');
+    print('  - Split Members: $splitMembers');
 
     // Create expense with automatic retry on certain failures
     for (int attempt = 0; attempt < 2; attempt++) {
@@ -310,8 +384,8 @@ class _ExpenseCreationScreenState extends State<ExpenseCreationScreen> {
           groupId: _groupId!,
           title: title,
           amount: amount,
-          payerId: _selectedPayer?['id'] ?? 'current-user',
-          eventId: _selectedEvent?['id'],
+          payerId: payerId,
+          eventId: eventId,
           splitMembers: splitMembers,
         );
 
@@ -322,8 +396,9 @@ class _ExpenseCreationScreenState extends State<ExpenseCreationScreen> {
 
         if (attempt == 0 &&
             (e.toString().contains('Authentication') ||
-                e.toString().contains('session'))) {
-          print('🔄 Retrying after authentication issue...');
+                e.toString().contains('session') ||
+                e.toString().contains('uuid'))) {
+          print('🔄 Retrying after authentication/uuid issue...');
           await Future.delayed(Duration(seconds: 2));
           continue; // Retry
         }
@@ -333,6 +408,13 @@ class _ExpenseCreationScreenState extends State<ExpenseCreationScreen> {
     }
 
     throw Exception('Expense creation failed after multiple attempts');
+  }
+
+  // CRITICAL FIX: Add UUID validation helper
+  bool _isValidUUID(String value) {
+    final uuidPattern = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return uuidPattern.hasMatch(value);
   }
 
   // CRITICAL FIX: Enhanced error handling with specific error types
